@@ -5,6 +5,10 @@ const express = require('express');
 const pino = require('pino');
 const fs = require('fs');
 
+// Fix crypto untuk Node.js 18
+const { webcrypto } = require('crypto');
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
+
 // ══ EXPRESS SERVER (biar Railway tidak mati) ══
 const app = express();
 app.use(express.json());
