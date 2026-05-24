@@ -1,354 +1,471 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
-const express = require('express');
-const pino = require('pino');
-const fs = require('fs');
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  makeCacheableSignalKeyStore
+} = require('@whiskeysockets/baileys')
 
-// Fix crypto untuk Node.js 18
-const { webcrypto } = require('crypto');
-if (!globalThis.crypto) globalThis.crypto = webcrypto;
+const { initializeApp, cert } = require('firebase-admin/app')
+const { getFirestore, FieldValue } = require('firebase-admin/firestore')
 
-// ══ EXPRESS SERVER (biar Railway tidak mati) ══
-const app = express();
-app.use(express.json());
-app.get('/', (req, res) => res.send('KPC Bot WA - Online ✅'));
-app.listen(process.env.PORT || 3000, () => console.log('Server running'));
+const express = require('express')
+const pino = require('pino')
+const fs = require('fs')
 
-// ══ FIREBASE INIT ══
-const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIAL || '{}');
-initializeApp({ credential: cert(serviceAccount) });
-const db = getFirestore();
+const { webcrypto } = require('crypto')
 
-// ══ CONFIG ══
+if (!globalThis.crypto) {
+  globalThis.crypto = webcrypto
+}
+
+// ================= EXPRESS =================
+
+const app = express()
+
+app.use(express.json())
+
+app.get('/', (_, res) => {
+  res.send('KPC BOT ONLINE ✅')
+})
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('✅ SERVER ONLINE')
+})
+
+// ================= FIREBASE =================
+
+const serviceAccount = JSON.parse(
+  process.env.FIREBASE_CREDENTIAL || '{}'
+)
+
+initializeApp({
+  credential: cert(serviceAccount)
+})
+
+const db = getFirestore()
+
+// ================= CONFIG =================
+
 const ADMIN_NUMBERS = [
   '628983923559',
-  '6281252425581', 
+  '6281252425581',
   '6288989378157',
   '628211549460'
-];
-const ADMIN_NAMES = ['Alfian', 'Nanang', 'Bos Tuyul', 'Vinzzz'];
+]
 
-// Format nomor WA
-function fmtNum(num) {
-  let n = num.replace(/[^0-9]/g, '');
-  if (n.startsWith('0')) n = '62' + n.slice(1);
-  if (!n.endsWith('@s.whatsapp.net')) n += '@s.whatsapp.net';
-  return n;
+function formatNumber(num) {
+  let n = num.replace(/\D/g, '')
+
+  if (n.startsWith('0')) {
+    n = '62' + n.slice(1)
+  }
+
+  if (!n.includes('@s.whatsapp.net')) {
+    n += '@s.whatsapp.net'
+  }
+
+  return n
 }
 
-function cleanNum(jid) {
-  return jid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+function cleanNumber(jid = '') {
+  return jid
+    .replace('@s.whatsapp.net', '')
+    .replace('@g.us', '')
 }
 
-// ══ BOT UTAMA ══
+// ================= START BOT =================
+
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+
+  const { state, saveCreds } =
+    await useMultiFileAuthState('./auth_info')
 
   const sock = makeWASocket({
+
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+      keys: makeCacheableSignalKeyStore(
+        state.keys,
+        pino({ level: 'silent' })
+      )
     },
+
+    logger: pino({
+      level: 'silent'
+    }),
+
+    browser: ['KPC STORE', 'Chrome', '1.0.0'],
+
     printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
-    // Pakai pairing code, bukan QR
     mobile: false,
-  });
 
-  // ══ PAIRING CODE ══
-  if (!sock.authState.creds.registered) {
-    const phoneNumber = process.env.BOT_NUMBER || '';
+    markOnlineOnConnect: true,
+    syncFullHistory: false,
+
+    generateHighQualityLinkPreview: true,
+
+    defaultQueryTimeoutMs: 60000,
+    connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 10000,
+    retryRequestDelayMs: 250
+  })
+
+  // ================= PAIRING CODE =================
+
+  if (!state.creds.registered) {
+
+    const phoneNumber = process.env.BOT_NUMBER
+
     if (!phoneNumber) {
-      console.log('❌ Set BOT_NUMBER di environment variable Railway!');
-      process.exit(1);
+      console.log('❌ BOT_NUMBER BELUM DIISI')
+      process.exit(1)
     }
-    await new Promise(r => setTimeout(r, 2000));
-    const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
-    console.log('\n╔════════════════════════╗');
-    console.log('║  KODE PAIRING WA BOT   ║');
-    console.log('╠════════════════════════╣');
-    console.log('║  KODE: ' + code + '         ║');
-    console.log('╚════════════════════════╝');
-    console.log('\nBuka WA → Perangkat Tertaut → Tautkan Perangkat → Masukkan Kode\n');
-    
-    // Simpan kode ke Firebase biar bisa dilihat dari web
-    await db.collection('config').doc('pairingCode').set({ code, ts: FieldValue.serverTimestamp() });
-  }
 
-  sock.ev.on('creds.update', saveCreds);
+    setTimeout(async () => {
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code !== DisconnectReason.loggedOut) {
-        console.log('Reconnecting...');
-        setTimeout(startBot, 3000);
-      } else {
-        console.log('Logged out. Hapus folder auth_info dan restart.');
-      }
-    } else if (connection === 'open') {
-      console.log('✅ Bot WA KPC Store ONLINE!');
-      db.collection('config').doc('botStatus').set({ online: true, ts: FieldValue.serverTimestamp() });
-    }
-  });
+      try {
 
-  // ══ TERIMA PESAN ══
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+        const code =
+          await sock.requestPairingCode(
+            phoneNumber.replace(/\D/g, '')
+          )
 
-    for (const msg of messages) {
-      if (msg.key.fromMe) continue;
-      const from = msg.key.remoteJid;
-      const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-      const senderNum = cleanNum(from);
+        console.log(`
+╔════════════════════════╗
+║    KODE PAIRING WA     ║
+╠════════════════════════╣
+║       ${code}       
+╚════════════════════════╝
+`)
 
-      // Cek apakah dari admin
-      const adminIdx = ADMIN_NUMBERS.indexOf(senderNum);
-      const isAdmin = adminIdx >= 0;
+        await db
+          .collection('config')
+          .doc('pairingCode')
+          .set({
+            code,
+            ts: FieldValue.serverTimestamp()
+          })
 
-      if (!text) continue;
+      } catch (err) {
 
-      console.log(`📨 [${isAdmin ? 'ADMIN:'+ADMIN_NAMES[adminIdx] : senderNum}]: ${text}`);
+        console.log('❌ GAGAL AMBIL PAIRING')
+        console.log(err)
 
-      // ══ COMMAND ADMIN ══
-      if (isAdmin) {
-        await handleAdminCommand(sock, from, text, senderNum, ADMIN_NAMES[adminIdx]);
-        continue;
       }
 
-      // ══ PESAN DARI PEMBELI ══
-      await handleBuyerMessage(sock, from, text, senderNum);
-    }
-  });
-
-  // ══ LISTENER FIREBASE → NOTIF KE ADMIN ══
-  listenFirebaseOrders(sock);
-  listenFirebaseChat(sock);
-}
-
-// ══ HANDLE PESAN ADMIN ══
-async function handleAdminCommand(sock, from, text, num, name) {
-  const cmd = text.trim().toLowerCase();
-
-  if (cmd === '!help' || cmd === '!bantuan') {
-    await sock.sendMessage(from, { text: 
-      '╔══════════════════╗\n' +
-      '║  KPC BOT COMMAND  ║\n' +
-      '╚══════════════════╝\n\n' +
-      '📋 *ORDER:*\n' +
-      '!pending → lihat order pending\n' +
-      '!done [ID] → tandai order selesai\n' +
-      '!cancel [ID] → batalkan order\n\n' +
-      '💬 *CHAT:*\n' +
-      '!chat → lihat chat masuk\n' +
-      '!balas [nomor] [pesan] → balas chat pembeli\n\n' +
-      '📊 *INFO:*\n' +
-      '!status → status toko\n' +
-      '!online → set admin online\n' +
-      '!offline → set admin offline'
-    });
-    return;
+    }, 5000)
   }
 
-  if (cmd === '!pending') {
-    const snap = await db.collection('orders').where('status', '==', 'pending').orderBy('createdAt', 'desc').limit(10).get();
-    if (snap.empty) { await sock.sendMessage(from, { text: '✅ Tidak ada order pending!' }); return; }
-    let msg = '📋 *ORDER PENDING:*\n\n';
-    snap.forEach(d => {
-      const o = d.data();
-      msg += `🧾 #${o.orderId||d.id.slice(-6).toUpperCase()}\n`;
-      msg += `🎮 ${o.usn||'-'}\n`;
-      msg += `💰 Rp ${(o.totalRb||0).toLocaleString('id-ID')}.000\n`;
-      msg += `🕐 ${o.tStr||'-'}\n\n`;
-    });
-    await sock.sendMessage(from, { text: msg });
-    return;
-  }
+  // ================= SAVE SESSION =================
 
-  if (cmd.startsWith('!done ') || cmd.startsWith('!selesai ')) {
-    const orderId = text.split(' ')[1]?.toUpperCase();
-    if (!orderId) { await sock.sendMessage(from, { text: '⚠️ Format: !done [ORDER_ID]' }); return; }
-    const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
-    if (snap.empty) { await sock.sendMessage(from, { text: '❌ Order #'+orderId+' tidak ditemukan!' }); return; }
-    const docRef = snap.docs[0];
-    const order = docRef.data();
-    await docRef.ref.update({ status: 'done' });
-    await sock.sendMessage(from, { text: '✅ Order #'+orderId+' ditandai SELESAI!' });
-    // Kirim notif ke pembeli
-    if (order.buyerWa) {
-      const buyerJid = fmtNum(order.buyerWa);
-      await sock.sendMessage(buyerJid, { text:
-        '✅ *ORDER SELESAI!*\n\n' +
-        'Halo *'+order.usn+'*! Order kamu sudah diproses!\n\n' +
-        '*Order ID:* #'+orderId+'\n' +
-        '*Total:* Rp '+(order.totalRb||0).toLocaleString('id-ID')+'.000\n\n' +
-        'Terima kasih belanja di *KPC Store* 🏍️\nJangan lupa kasih testimoni ya! 🌟'
-      });
-    }
-    return;
-  }
+  sock.ev.on('creds.update', saveCreds)
 
-  if (cmd.startsWith('!cancel ') || cmd.startsWith('!batal ')) {
-    const orderId = text.split(' ')[1]?.toUpperCase();
-    if (!orderId) { await sock.sendMessage(from, { text: '⚠️ Format: !cancel [ORDER_ID]' }); return; }
-    const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
-    if (snap.empty) { await sock.sendMessage(from, { text: '❌ Order #'+orderId+' tidak ditemukan!' }); return; }
-    const docRef = snap.docs[0];
-    const order = docRef.data();
-    await docRef.ref.update({ status: 'cancel' });
-    await sock.sendMessage(from, { text: '❌ Order #'+orderId+' DIBATALKAN!' });
-    if (order.buyerWa) {
-      const buyerJid = fmtNum(order.buyerWa);
-      await sock.sendMessage(buyerJid, { text:
-        '❌ *ORDER DIBATALKAN*\n\nHalo *'+order.usn+'*, maaf order kamu dibatalkan.\n\n' +
-        '*Order ID:* #'+orderId+'\n\nHubungi admin untuk info lebih lanjut 🙏'
-      });
-    }
-    return;
-  }
+  // ================= CONNECTION =================
 
-  if (cmd === '!online') {
-    await db.collection('config').doc('adminStatus').set({ [num]: true }, { merge: true });
-    await sock.sendMessage(from, { text: '✅ Kamu sekarang ONLINE di toko!' });
-    return;
-  }
+  sock.ev.on(
+    'connection.update',
+    async (update) => {
 
-  if (cmd === '!offline') {
-    await db.collection('config').doc('adminStatus').set({ [num]: false }, { merge: true });
-    await sock.sendMessage(from, { text: '😴 Kamu sekarang OFFLINE di toko!' });
-    return;
-  }
+      const {
+        connection,
+        lastDisconnect
+      } = update
 
-  if (cmd === '!chat') {
-    const snap = await db.collection('livechat').orderBy('ts', 'desc').limit(20).get();
-    if (snap.empty) { await sock.sendMessage(from, { text: '💬 Belum ada chat masuk!' }); return; }
-    const sessions = {};
-    snap.forEach(d => {
-      const o = d.data();
-      if (!sessions[o.sessionId]) sessions[o.sessionId] = { name: o.name, msgs: [] };
-      sessions[o.sessionId].msgs.unshift(o);
-    });
-    let msg = '💬 *CHAT MASUK:*\n\n';
-    Object.values(sessions).slice(0, 5).forEach(s => {
-      const last = s.msgs[s.msgs.length - 1];
-      msg += `👤 *${s.name}*: ${last?.text?.slice(0, 50)||''}\n`;
-    });
-    msg += '\n_!balas [nama] [pesan] untuk membalas_';
-    await sock.sendMessage(from, { text: msg });
-    return;
-  }
+      if (connection === 'close') {
 
-  if (cmd.startsWith('!balas ')) {
-    const parts = text.split(' ');
-    const targetName = parts[1];
-    const replyText = parts.slice(2).join(' ');
-    if (!targetName || !replyText) { await sock.sendMessage(from, { text: '⚠️ Format: !balas [nama] [pesan]' }); return; }
-    // Cari session berdasarkan nama
-    const snap = await db.collection('livechat').where('name', '==', targetName).limit(1).get();
-    if (snap.empty) { await sock.sendMessage(from, { text: '❌ Pembeli '+targetName+' tidak ditemukan!' }); return; }
-    const sessionId = snap.docs[0].data().sessionId;
-    await db.collection('livechat').add({ sessionId, name: 'Admin KPC', text: replyText, type: 'admin', ts: FieldValue.serverTimestamp() });
-    await sock.sendMessage(from, { text: '✅ Pesan terkirim ke '+targetName+'!' });
-    return;
-  }
+        const reason =
+          lastDisconnect?.error?.output?.statusCode
 
-  if (cmd === '!status') {
-    const pending = await db.collection('orders').where('status', '==', 'pending').get();
-    const done = await db.collection('orders').where('status', '==', 'done').get();
-    await sock.sendMessage(from, { text:
-      '📊 *STATUS KPC STORE*\n\n' +
-      '⏳ Pending: '+pending.size+' order\n' +
-      '✅ Selesai: '+done.size+' order\n\n' +
-      '_Bot WA KPC Store Online_ ✅'
-    });
-    return;
-  }
-}
+        console.log('❌ CONNECTION CLOSED:', reason)
 
-// ══ HANDLE PESAN PEMBELI ══
-async function handleBuyerMessage(sock, from, text, num) {
-  const cmd = text.trim().toLowerCase();
-  
-  let reply = '';
-  if (cmd.includes('harga') || cmd.includes('price') || cmd.includes('berapa')) {
-    reply = '📋 *HARGA KPC STORE*\n\n*GAMEPASS:*\n📻 Radio: 4rb\n🔧 Suspensi: 4rb\n🎨 Cat: 7rb\n⚙️ Aksesoris: 7rb\n🛞 Velg: 8rb\n🪪 Plat: 8rb\n➕ Slot: 9rb\n🏁 Drag: 12rb\n💎 Mewah: 13rb\n🚔 Polisi: 16rb\n💵 2x Gaji: 45rb\n\n*CASH:*\n💸 1jt=2rb | 5jt=3rb\n💰 10jt=5rb | 50jt=7rb\n🤑 100jt=10rb | 500jt=37rb\n👑 1M=70rb\n\n🛒 Order di: https://kpc-store-dds.vercel.app';
-  } else if (cmd.includes('cara') || cmd.includes('order') || cmd.includes('beli')) {
-    reply = '🛒 *CARA ORDER KPC STORE:*\n\n1️⃣ Buka toko: https://kpc-store-dds.vercel.app\n2️⃣ Isi username Roblox + nomor WA\n3️⃣ Pilih item yang mau dibeli\n4️⃣ Klik Chat Admin\n5️⃣ Bayar via QRIS\n6️⃣ Tunggu proses 1-5 menit ✅';
-  } else if (cmd.includes('bayar') || cmd.includes('transfer') || cmd.includes('qris')) {
-    reply = '💳 *PEMBAYARAN:*\n\nKami menerima:\n✅ QRIS (scan QR di toko)\n✅ Transfer Bank\n\nSetelah bayar, kirim bukti ke admin ya!';
-  } else if (cmd.includes('lama') || cmd.includes('proses')) {
-    reply = '⚡ Proses *1-5 menit* setelah konfirmasi pembayaran!\nAdmin langsung gerak! 🚀';
-  } else if (cmd.includes('aman') || cmd.includes('tipu') || cmd.includes('scam')) {
-    reply = '🛡️ *100% AMAN!*\n\nSudah ribuan order berhasil!\nSetiap transaksi ada Order ID sebagai bukti.\nNo tipu-tipu! ✅';
-  } else {
-    reply = '👋 Halo! Saya bot KPC Store.\n\nKetik:\n• *harga* → lihat daftar harga\n• *cara order* → cara beli\n• *bayar* → info pembayaran\n\nAtau langsung order di:\n🛒 https://kpc-store-dds.vercel.app\n\nAdmin akan segera membalas! 💬';
-  }
+        if (
+          reason !== DisconnectReason.loggedOut
+        ) {
 
-  await sock.sendMessage(from, { text: reply });
+          console.log('🔄 RECONNECT 5 DETIK')
 
-  // Notif ke semua admin
-  for (const adminNum of ADMIN_NUMBERS) {
-    try {
-      await sock.sendMessage(fmtNum(adminNum), { text:
-        '🔔 *PESAN MASUK*\n\n' +
-        '👤 Dari: +' + num + '\n' +
-        '💬 Pesan: ' + text.slice(0, 100) + '\n\n' +
-        '_Balas dengan !balas atau langsung WA pembeli_'
-      });
-    } catch(e) {}
-  }
-}
+          setTimeout(() => {
+            startBot()
+          }, 5000)
 
-// ══ LISTENER ORDER FIREBASE → NOTIF WA ADMIN ══
-function listenFirebaseOrders(sock) {
-  db.collection('orders').where('status', '==', 'pending')
-    .onSnapshot(snap => {
-      snap.docChanges().forEach(async change => {
-        if (change.type !== 'added') return;
-        const o = change.doc.data();
-        const msg = 
-          '🔔 *ORDER BARU MASUK!*\n\n' +
-          '🧾 ID: #'+(o.orderId||change.doc.id.slice(-6).toUpperCase())+'\n' +
-          '🎮 Username: '+o.usn+'\n' +
-          '📱 WA: '+(o.buyerWa||'-')+'\n' +
-          '📍 Lokasi: '+(o.buyerLocation?.city||'-')+', '+(o.buyerLocation?.country||'-')+'\n' +
-          '💰 Total: Rp '+(o.totalRb||0).toLocaleString('id-ID')+'.000\n' +
-          '🕐 Waktu: '+(o.tStr||'-')+'\n\n' +
-          '✅ !done '+(o.orderId||change.doc.id.slice(-6).toUpperCase())+' → tandai selesai\n' +
-          '❌ !cancel '+(o.orderId||change.doc.id.slice(-6).toUpperCase())+' → batalkan';
+        } else {
 
-        for (const adminNum of ADMIN_NUMBERS) {
-          try {
-            await sock.sendMessage(fmtNum(adminNum), { text: msg });
-          } catch(e) {}
+          console.log(
+            '❌ SESSION LOGOUT HAPUS auth_info'
+          )
+
         }
-      });
-    });
-}
+      }
 
-// ══ LISTENER CHAT FIREBASE → NOTIF WA ADMIN ══
-function listenFirebaseChat(sock) {
-  db.collection('livechat').where('type', '==', 'user')
-    .onSnapshot(snap => {
-      snap.docChanges().forEach(async change => {
-        if (change.type !== 'added') return;
-        const o = change.doc.data();
-        const msg = 
-          '💬 *CHAT BARU DI TOKO!*\n\n' +
-          '👤 Nama: '+(o.name||'-')+'\n' +
-          '💬 Pesan: '+o.text+'\n\n' +
-          '_Balas: !balas '+(o.name||'pembeli')+' [pesan]_\n' +
-          '_Atau buka dashboard: https://kpc-store-dds.vercel.app/admin-dashboard.html_';
+      if (connection === 'open') {
 
-        for (const adminNum of ADMIN_NUMBERS) {
-          try {
-            await sock.sendMessage(fmtNum(adminNum), { text: msg });
-          } catch(e) {}
+        console.log('✅ BOT CONNECTED')
+
+        try {
+
+          await db
+            .collection('config')
+            .doc('botStatus')
+            .set({
+              online: true,
+              ts: FieldValue.serverTimestamp()
+            })
+
+        } catch (e) {
+          console.log(e)
         }
-      });
-    });
+      }
+    }
+  )
+
+  // ================= MESSAGE =================
+
+  sock.ev.on(
+    'messages.upsert',
+    async ({ messages, type }) => {
+
+      try {
+
+        if (type !== 'notify') return
+
+        const msg = messages[0]
+
+        if (!msg.message) return
+        if (msg.key.fromMe) return
+
+        const from = msg.key.remoteJid
+
+        const sender =
+          cleanNumber(msg.key.participant || from)
+
+        const text =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage?.text ||
+          msg.message?.imageMessage?.caption ||
+          ''
+
+        if (!text) return
+
+        console.log(`
+==========================
+📨 PESAN MASUK
+👤 ${sender}
+💬 ${text}
+==========================
+`)
+
+        const isAdmin =
+          ADMIN_NUMBERS.includes(sender)
+
+        // ================= ADMIN COMMAND =================
+
+        if (isAdmin) {
+
+          const cmd = text.toLowerCase()
+
+          if (cmd === '!ping') {
+
+            return await sock.sendMessage(from, {
+              text: '🏓 PONG BOT ONLINE'
+            })
+
+          }
+
+          if (cmd === '!menu') {
+
+            return await sock.sendMessage(from, {
+              text:
+`╔══════════════╗
+║   KPC MENU   ║
+╚══════════════╝
+
+!ping
+!menu
+!runtime
+!owner
+!status`
+            })
+
+          }
+
+          if (cmd === '!status') {
+
+            return await sock.sendMessage(from, {
+              text:
+`✅ STATUS BOT
+
+• Bot aktif
+• Server online
+• Firebase connected
+• Pairing aman`
+            })
+
+          }
+
+          if (cmd === '!owner') {
+
+            return await sock.sendMessage(from, {
+              text:
+`👑 OWNER KPC STORE
+
+• 6281252425581`
+            })
+
+          }
+
+          if (cmd === '!runtime') {
+
+            const runtime =
+              process.uptime()
+
+            const jam =
+              Math.floor(runtime / 3600)
+
+            const menit =
+              Math.floor(runtime % 3600 / 60)
+
+            const detik =
+              Math.floor(runtime % 60)
+
+            return await sock.sendMessage(from, {
+              text:
+`⏱️ RUNTIME BOT
+
+${jam} Jam
+${menit} Menit
+${detik} Detik`
+            })
+
+          }
+        }
+
+        // ================= AUTO RESPON =================
+
+        let reply = ''
+
+        const lower = text.toLowerCase()
+
+        if (
+          lower.includes('harga') ||
+          lower.includes('price')
+        ) {
+
+          reply =
+`📋 LIST HARGA KPC STORE
+
+💸 CASH DDS
+1JT = 2RB
+5JT = 3RB
+10JT = 5RB
+50JT = 7RB
+100JT = 10RB
+500JT = 37RB
+1M = 70RB
+
+🎮 GAMEPASS
+RADIO = 4RB
+SUSPENSI = 4RB
+CAT = 7RB
+AKSESORIS = 7RB
+VELG = 8RB
+PLAT = 8RB
+SLOT = 9RB
+DRAG = 12RB
+MEWAH = 13RB
+POLISI = 16RB
+2X GAJI = 45RB`
+
+        } else if (
+          lower.includes('order') ||
+          lower.includes('beli')
+        ) {
+
+          reply =
+`🛒 CARA ORDER
+
+1. Kirim username Roblox
+2. Pilih item
+3. Bayar QRIS
+4. Tunggu proses
+5. Done ✅`
+
+        } else if (
+          lower.includes('qris') ||
+          lower.includes('bayar')
+        ) {
+
+          reply =
+`💳 PEMBAYARAN
+
+✅ QRIS
+✅ TRANSFER
+
+Kirim bukti transfer setelah bayar.`
+
+        } else {
+
+          reply =
+`👋 HALO DARI KPC STORE
+
+Ketik:
+• harga
+• order
+• bayar
+
+Admin akan membalas secepatnya ✅`
+        }
+
+        // ================= SEND REPLY =================
+
+        await sock.sendMessage(from, {
+          text: reply
+        })
+
+        // ================= NOTIF ADMIN =================
+
+        for (const admin of ADMIN_NUMBERS) {
+
+          try {
+
+            await sock.sendMessage(
+              formatNumber(admin),
+              {
+                text:
+`🔔 CHAT MASUK
+
+👤 ${sender}
+
+💬 ${text}`
+              }
+            )
+
+          } catch (e) {
+            console.log(e)
+          }
+        }
+
+      } catch (err) {
+
+        console.log('❌ ERROR MESSAGE')
+        console.log(err)
+
+      }
+    }
+  )
 }
 
-// START
-startBot().catch(console.error);
+// ================= ANTI CRASH =================
+
+process.on(
+  'uncaughtException',
+  console.error
+)
+
+process.on(
+  'unhandledRejection',
+  console.error
+)
+
+// ================= START =================
+
+startBot()
