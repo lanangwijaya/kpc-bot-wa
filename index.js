@@ -25,24 +25,33 @@ const app = express()
 app.use(express.json())
 
 app.get('/', (_, res) => {
-  res.send('KPC BOT ONLINE ✅')
+  res.send('KPC BOT ONLINE âœ…')
 })
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log('✅ SERVER ONLINE')
+  console.log('âœ… SERVER ONLINE')
 })
 
 // ================= FIREBASE =================
 
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_CREDENTIAL || '{}'
-)
+let db;
+try {
+  const serviceAccount = JSON.parse(
+    process.env.FIREBASE_CREDENTIAL || '{}'
+  )
 
-initializeApp({
-  credential: cert(serviceAccount)
-})
-
-const db = getFirestore()
+  if (serviceAccount.project_id) {
+    initializeApp({
+      credential: cert(serviceAccount)
+    })
+    db = getFirestore()
+    console.log('ðŸ”¥ FIREBASE BERHASIL DIKONEKSIKAN')
+  } else {
+    console.log('âš ï¸ WARNING: FIREBASE_CREDENTIAL kosong atau tidak valid. Fitur database dinonaktifkan.')
+  }
+} catch (error) {
+  console.error('âŒ ERROR FIREBASE INITIALIZATION:', error.message)
+}
 
 // ================= CONFIG =================
 
@@ -81,7 +90,6 @@ async function startBot() {
     await useMultiFileAuthState('./auth_info')
 
   const sock = makeWASocket({
-
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(
@@ -117,42 +125,37 @@ async function startBot() {
     const phoneNumber = process.env.BOT_NUMBER
 
     if (!phoneNumber) {
-      console.log('❌ BOT_NUMBER BELUM DIISI')
+      console.log('âŒ BOT_NUMBER BELUM DIISI DI ENVIRONMENT VARIABLES')
       process.exit(1)
     }
 
     setTimeout(async () => {
-
       try {
-
-        const code =
-          await sock.requestPairingCode(
-            phoneNumber.replace(/\D/g, '')
-          )
+        const code = await sock.requestPairingCode(
+          phoneNumber.replace(/\D/g, '')
+        )
 
         console.log(`
-╔════════════════════════╗
-║    KODE PAIRING WA     ║
-╠════════════════════════╣
-║       ${code}       
-╚════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘    KODE PAIRING WA     â•‘
+â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
+â•‘       ${code}       
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 `)
 
-        await db
-          .collection('config')
-          .doc('pairingCode')
-          .set({
-            code,
-            ts: FieldValue.serverTimestamp()
-          })
-
+        if (db) {
+          await db
+            .collection('config')
+            .doc('pairingCode')
+            .set({
+              code,
+              ts: FieldValue.serverTimestamp()
+            })
+        }
       } catch (err) {
-
-        console.log('❌ GAGAL AMBIL PAIRING')
+        console.log('âŒ GAGAL AMBIL PAIRING CODE')
         console.log(err)
-
       }
-
     }, 5000)
   }
 
@@ -165,79 +168,64 @@ async function startBot() {
   sock.ev.on(
     'connection.update',
     async (update) => {
-
       const {
         connection,
         lastDisconnect
       } = update
 
       if (connection === 'close') {
+        const reason = lastDisconnect?.error?.output?.statusCode
+        console.log('âŒ CONNECTION CLOSED, REASON CODE:', reason)
 
-        const reason =
-          lastDisconnect?.error?.output?.statusCode
-
-        console.log('❌ CONNECTION CLOSED:', reason)
-
-        if (
-          reason !== DisconnectReason.loggedOut
-        ) {
-
-          console.log('🔄 RECONNECT 5 DETIK')
-
+        if (reason !== DisconnectReason.loggedOut) {
+          console.log('ðŸ”„ RECONNECT DALAM 5 DETIK...')
           setTimeout(() => {
             startBot()
           }, 5000)
-
         } else {
-
-          console.log(
-            '❌ SESSION LOGOUT HAPUS auth_info'
-          )
-
+          console.log('âŒ SESSION LOGOUT. Silakan hapus folder "auth_info" dan scan ulang!')
         }
       }
 
       if (connection === 'open') {
+        console.log('âœ… BOT CONNECTED & JALAN')
 
-        console.log('✅ BOT CONNECTED')
-
-        try {
-
-          await db
-            .collection('config')
-            .doc('botStatus')
-            .set({
-              online: true,
-              ts: FieldValue.serverTimestamp()
-            })
-
-        } catch (e) {
-          console.log(e)
+        if (db) {
+          try {
+            await db
+              .collection('config')
+              .doc('botStatus')
+              .set({
+                online: true,
+                ts: FieldValue.serverTimestamp()
+              })
+          } catch (e) {
+            console.log('âŒ GAGAL UPDATE STATUS KE FIREBASE:', e.message)
+          }
         }
       }
     }
   )
 
-  // ================= MESSAGE =================
+  // ================= MESSAGE HANDLER =================
 
   sock.ev.on(
     'messages.upsert',
     async ({ messages, type }) => {
-
       try {
-
         if (type !== 'notify') return
 
         const msg = messages[0]
-
         if (!msg.message) return
         if (msg.key.fromMe) return
 
         const from = msg.key.remoteJid
+        const isGroup = from.endsWith('@g.us')
 
-        const sender =
-          cleanNumber(msg.key.participant || from)
+        // Mendapatkan nomor pengirim asli
+        const sender = cleanNumber(msg.key.participant || from)
 
+        // Mengambil teks pesan dari berbagai tipe pesan WhatsApp
         const text =
           msg.message?.conversation ||
           msg.message?.extendedTextMessage?.text ||
@@ -248,112 +236,90 @@ async function startBot() {
 
         console.log(`
 ==========================
-📨 PESAN MASUK
-👤 ${sender}
-💬 ${text}
+ðŸ“¨ PESAN MASUK ${isGroup ? '[GRUP]' : '[PC]'}
+ðŸ‘¤ Nomor: ${sender}
+ðŸ’¬ Pesan: ${text}
 ==========================
 `)
 
-        const isAdmin =
-          ADMIN_NUMBERS.includes(sender)
+        const isAdmin = ADMIN_NUMBERS.includes(sender)
 
         // ================= ADMIN COMMAND =================
-
         if (isAdmin) {
-
-          const cmd = text.toLowerCase()
+          const cmd = text.toLowerCase().trim()
 
           if (cmd === '!ping') {
-
             return await sock.sendMessage(from, {
-              text: '🏓 PONG BOT ONLINE'
+              text: 'ðŸ“ PONG! BOT ONLINE DAN MERESPON.'
             })
-
           }
 
           if (cmd === '!menu') {
-
             return await sock.sendMessage(from, {
               text:
-`╔══════════════╗
-║   KPC MENU   ║
-╚══════════════╝
+`â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘   KPC MENU   â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-!ping
-!menu
-!runtime
-!owner
-!status`
+â€¢ !ping    - Cek status bot
+â€¢ !menu    - Menampilkan menu ini
+â€¢ !runtime - Melihat durasi aktif bot
+â€¢ !owner   - Informasi owner KPC
+â€¢ !status  - Cek detail server & Firebase`
             })
-
           }
 
           if (cmd === '!status') {
-
             return await sock.sendMessage(from, {
               text:
-`✅ STATUS BOT
+`âœ… STATUS BOT KPC
 
-• Bot aktif
-• Server online
-• Firebase connected
-• Pairing aman`
+â€¢ Bot: Aktif
+â€¢ Server: Online
+â€¢ Firebase: ${db ? 'Terkoneksi ðŸ”¥' : 'Tidak Terkoneksi âš ï¸'}
+â€¢ Pairing: Berhasil`
             })
-
           }
 
           if (cmd === '!owner') {
-
             return await sock.sendMessage(from, {
               text:
-`👑 OWNER KPC STORE
+`ðŸ‘‘ OWNER KPC STORE
 
-• 6281252425581`
+â€¢ No. HP: 6281252425581`
             })
-
           }
 
           if (cmd === '!runtime') {
-
-            const runtime =
-              process.uptime()
-
-            const jam =
-              Math.floor(runtime / 3600)
-
-            const menit =
-              Math.floor(runtime % 3600 / 60)
-
-            const detik =
-              Math.floor(runtime % 60)
+            const runtime = process.uptime()
+            const jam = Math.floor(runtime / 3600)
+            const menit = Math.floor((runtime % 3600) / 60)
+            const detik = Math.floor(runtime % 60)
 
             return await sock.sendMessage(from, {
               text:
-`⏱️ RUNTIME BOT
+`â±ï¸ RUNTIME BOT KPC
 
-${jam} Jam
-${menit} Menit
-${detik} Detik`
+ðŸ‘‰ ${jam} Jam ${menit} Menit ${detik} Detik`
             })
-
           }
         }
 
-        // ================= AUTO RESPON =================
+        // ================= AUTO RESPON (KHUSUS CHAT PRIBADI / PC) =================
+        // Mencegah bot membalas otomatis di dalam grup yang bisa mengganggu member lain
+        if (isGroup) return;
 
         let reply = ''
-
         const lower = text.toLowerCase()
 
         if (
           lower.includes('harga') ||
           lower.includes('price')
         ) {
-
           reply =
-`📋 LIST HARGA KPC STORE
+`ðŸ“‹ LIST HARGA KPC STORE
 
-💸 CASH DDS
+ðŸ’¸ CASH DDS
 1JT = 2RB
 5JT = 3RB
 10JT = 5RB
@@ -362,7 +328,7 @@ ${detik} Detik`
 500JT = 37RB
 1M = 70RB
 
-🎮 GAMEPASS
+ðŸŽ® GAMEPASS
 RADIO = 4RB
 SUSPENSI = 4RB
 CAT = 7RB
@@ -379,93 +345,81 @@ POLISI = 16RB
           lower.includes('order') ||
           lower.includes('beli')
         ) {
-
           reply =
-`🛒 CARA ORDER
+`ðŸ›’ CARA ORDER
 
 1. Kirim username Roblox
-2. Pilih item
-3. Bayar QRIS
-4. Tunggu proses
-5. Done ✅`
+2. Pilih item yang ingin dibeli
+3. Lakukan pembayaran via QRIS/Transfer
+4. Tunggu proses dari Admin
+5. Done âœ…`
 
         } else if (
           lower.includes('qris') ||
           lower.includes('bayar')
         ) {
-
           reply =
-`💳 PEMBAYARAN
+`ðŸ’³ PEMBAYARAN KPC STORE
 
-✅ QRIS
-✅ TRANSFER
+âœ… QRIS (Tanyakan ke admin jika belum dikirim)
+âœ… TRANSFER BANK
 
-Kirim bukti transfer setelah bayar.`
+Harap kirimkan bukti transfer yang valid setelah melakukan pembayaran.`
 
         } else {
-
           reply =
-`👋 HALO DARI KPC STORE
+`ðŸ‘‹ HALO! SELAMAT DATANG DI KPC STORE
 
-Ketik:
-• harga
-• order
-• bayar
+Ada yang bisa kami bantu? Silakan ketik kata kunci di bawah ini:
+â€¢ *harga* (Untuk melihat list harga terbaru)
+â€¢ *order* (Untuk mengetahui cara pemesanan)
+â€¢ *bayar* (Untuk opsi pembayaran)
 
-Admin akan membalas secepatnya ✅`
+Admin kami akan segera membalas chat kamu secara manual secepatnya! âœ…`
         }
 
-        // ================= SEND REPLY =================
-
+        // Kirim balasan otomatis ke user
         await sock.sendMessage(from, {
           text: reply
         })
 
-        // ================= NOTIF ADMIN =================
-
+        // ================= NOTIFIKASI KE ADMIN =================
+        // Mengirimkan notifikasi ke semua admin terdaftar jika ada user baru yang chat
         for (const admin of ADMIN_NUMBERS) {
-
           try {
+            // Hindari mengirimkan notifikasi chat masuk ke admin yang mengirim pesan itu sendiri
+            if (sender === admin) continue;
 
             await sock.sendMessage(
               formatNumber(admin),
               {
-                text:
-`🔔 CHAT MASUK
-
-👤 ${sender}
-
-💬 ${text}`
+                text: `ðŸ”” CHAT MASUK PC\n\nðŸ‘¤ Pengirim: @${sender}\nðŸ’¬ Pesan: "${text}"`,
+                mentions: [formatNumber(sender)]
               }
             )
-
           } catch (e) {
-            console.log(e)
+            console.log('âŒ GAGAL MENGIRIM NOTIFIKASI KE ADMIN:', e.message)
           }
         }
 
       } catch (err) {
-
-        console.log('❌ ERROR MESSAGE')
+        console.log('âŒ ERROR MESSAGE HANDLER')
         console.log(err)
-
       }
     }
   )
 }
 
-// ================= ANTI CRASH =================
+// ================= ANTI CRASH SYSTEM =================
 
-process.on(
-  'uncaughtException',
-  console.error
-)
+process.on('uncaughtException', (err) => {
+  console.error('âŒ CRASH DETECTED (uncaughtException):', err)
+})
 
-process.on(
-  'unhandledRejection',
-  console.error
-)
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('âŒ CRASH DETECTED (unhandledRejection) at:', promise, 'reason:', reason)
+})
 
-// ================= START =================
+// ================= RUN BOT =================
 
 startBot()
